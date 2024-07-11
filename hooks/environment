@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Function to resolve the value of a potentially unresolved secret
+resolve_secret() {
+  local secret_value="$1"
+  local pattern='^\$\((buildkite-agent secret get ([^)]+))\)$'
+  if [[ "$secret_value" =~ $pattern ]]; then
+    # Extract the secret name
+    local secret_name="${BASH_REMATCH[2]}"
+    secret_value=$(buildkite-agent secret get "$secret_name")
+  fi
+  echo "$secret_value"
+}
+
+# Fetch and resolve the API key
+export DT_UPLOAD_API_KEY=$(resolve_secret "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_UPLOAD_API_KEY")

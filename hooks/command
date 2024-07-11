@@ -1,13 +1,77 @@
 #!/bin/bash
 set -euo pipefail
 
-echo 'Get upload url';
-step1_response=$(curl -s -w '%{http_code}' -X POST -H \"Authorization: APIKey \\$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_UPLOAD_API_KEY\"  --data ''  https://api.securetheorem.com/uploadapi/v1/upload_init);
-http_code=\\${step1_response: -3};
-response_body=\\${step1_response::-3};
-[ ! \\${http_code} -eq 200 ] && echo \\${response_body} && exit 1;
-upload_url=\\$(echo \\${response_body} | jq -r \".upload_url\");
-echo \\$upload_url;
 
-echo 'Upload app';
-step2_response=$(curl --fail-with-body -F file=@${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH} \\${upload_url}) && echo \\$step2_response;
+# Check if the environment variable is set
+if [ -z "$DT_UPLOAD_API_KEY" ]; then
+    echo "Error: Environment variable DT_UPLOAD_API_KEY is not set."
+    exit 1
+fi
+
+# Check if the environment variable is set
+if [ -z "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH" ]; then
+    echo "Error: Environment variable BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH is not set."
+    exit 1
+fi
+
+# Check if BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SOURCEMAP_PATH is set
+source_map_path="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SOURCEMAP_PATH:-}"
+if [ -n "$source_map_path" ]; then
+    # Check if the path points to an existing file
+    if [ -f "$source_map_path" ]; then
+      :
+    else
+        echo "Error: sourcemap file '${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SOURCEMAP_PATH}' does not exist"
+        exit 1
+    fi
+fi
+
+# Get the file path from the environment variable
+file_path="$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH"
+
+# Check if the file exists
+if [ -f "$file_path" ]; then
+    echo "Will upload Mobile binary at $file_path to Data Theorem for scanning"
+else
+    echo "File does not exist at: $file_path"
+    exit 1
+fi
+
+maxRetries=3
+for (( retry = 0; retry < maxRetries; retry++ ))
+do
+  # Step 1: get the upload URL
+  echo "Get upload url"
+  step1_response=$(curl -s -w "%{http_code}" -X POST -H "Authorization: APIKey ${DT_UPLOAD_API_KEY}"  --data ""  https://api.securetheorem.com/uploadapi/v1/upload_init)
+  http_code=${step1_response: -3}
+  response_body=${step1_response::-3}
+
+  # For older versions of bash e.g. GNU bash, version 3.2.57(1)-release (x86_64-apple-darwin21)
+  # response_body=${step1_response%???}
+  # http_code=${step1_response#${response_body}}
+
+  # Check that http status code is 200
+  [ ! ${http_code} -eq 200 ] && echo ${response_body} && exit 1
+  upload_url=$(echo ${response_body} | jq -r ".upload_url")
+  echo ${upload_url}
+
+  # Step 2: upload the APK
+  echo "Upload app"
+  # Prepare `curl` command with main file
+  curl_command=(curl -F "file=@${file_path}")
+
+  # Check if source map file exists and add it to `curl` command
+  if [ -n "$source_map_path" ]; then
+      curl_command+=(-F "sourcemap=@${source_map_path}")
+      echo "Including sourcemap (${source_map_path})"
+  fi
+
+  # Add upload URL to `curl` command
+  curl_command+=(${upload_url})
+  step2_response=$("${curl_command[@]}") && echo ${step2_response} && break
+done
+
+if [ ${retry} -ge ${maxRetries} ]; then
+  echo "Upload failed after ${maxRetries} attempts"
+  exit 1
+fi

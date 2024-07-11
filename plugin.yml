@@ -14,4 +14,9 @@ configuration:
       type: string
     SIGNED_BINARY_PATH:
       type: string
+    SOURCEMAP_PATH:
+      type: string
+  required:
+    - UPLOAD_API_KEY
+    - SIGNED_BINARY_PATH
   additionalProperties: false
