@@ -1,0 +1,13 @@
+#!/bin/bash
+set -euo pipefail
+
+echo 'Get upload url';
+step1_response=$(curl -s -w '%{http_code}' -X POST -H \"Authorization: APIKey \\$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_UPLOAD_API_KEY\"  --data ''  https://api.securetheorem.com/uploadapi/v1/upload_init);
+http_code=\\${step1_response: -3};
+response_body=\\${step1_response::-3};
+[ ! \\${http_code} -eq 200 ] && echo \\${response_body} && exit 1;
+upload_url=\\$(echo \\${response_body} | jq -r \".upload_url\");
+echo \\$upload_url;
+
+echo 'Upload app';
+step2_response=$(curl --fail-with-body -F file=@${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH} \\${upload_url}) && echo \\$step2_response;
