@@ -16,6 +16,14 @@ configuration:
       type: string
     SOURCEMAP_PATH:
       type: string
+    POLL_SCAN_RESULTS:
+      type: "boolean"
+      default: false
+      description: |
+        If the plugin should wait until the scan is completed and check the scan results
+        When set to `true`, `MOBILE_RESULTS_API_KEY` also needs to be set
+    MOBILE_RESULTS_API_KEY:
+      type: string
   required:
     - UPLOAD_API_KEY
     - SIGNED_BINARY_PATH
