@@ -1,6 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 
+# Function to handle errors
+handle_error() {
+    local http_code=$1
+    local response_body=$2
+    case $http_code in
+        401)
+            echo "Error: Unauthorized (HTTP 401). Please verify that your API key as valid."
+            ;;
+        403)
+            echo "Error: Forbidden (HTTP 403). Please verify that your API key as valid scopes to access Mobile Secure results for this mobile app."
+            ;;
+        *)
+            echo "Failed to call API. HTTP Code: ${http_code}"
+            echo "Response: ${response_body}"
+            ;;
+    esac
+    exit 1
+}
+
 # Check if the environment variable is set
 if [ -z "$DT_UPLOAD_API_KEY" ]; then
     echo "Error: Environment variable DT_UPLOAD_API_KEY is not set."
@@ -42,8 +61,6 @@ if [[ "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS" == "true"
         echo "Error: Environment variable RESULTS_API_KEY must be set when POLL_SCAN_RESULTS is set to true."
         exit 1
     fi
-else
-    echo "POLL_SCAN_RESULTS is false"
 fi
 
 maxRetries=3
@@ -57,15 +74,9 @@ for (( retry = 0; retry < maxRetries; retry++ )); do
     http_code=${step1_response: -3}
     response_body=${step1_response::-3}
 
-    # For older versions of bash e.g. GNU bash, version 3.2.57(1)-release (x86_64-apple-darwin21)
-    # response_body=${step1_response%???}
-    # http_code=${step1_response#${response_body}}
-
     # Check that http status code is 200
-    if [ ! ${http_code} -eq 200 ]; then
-        echo "Failed to get upload URL. HTTP Code: ${http_code}"
-        echo ${response_body}
-        exit 1
+    if [ "$http_code" -ne 200 ]; then
+        handle_error "$http_code" "$response_body"
     fi
 
     upload_url=$(echo ${response_body} | jq -r ".upload_url")
@@ -84,10 +95,16 @@ for (( retry = 0; retry < maxRetries; retry++ )); do
 
     # Add upload URL to `curl` command
     curl_command+=(${upload_url})
-    step2_response=$("${curl_command[@]}") && echo ${step2_response}
+    step2_response=$("${curl_command[@]}" -s -w "%{http_code}")
+    http_code=${step2_response: -3}
+    response_body=${step2_response::-3}
 
-    mobile_app_id=$(echo "$step2_response" | jq -r '.mobile_app_id')
-    scan_id=$(echo "$step2_response" | jq -r '.scan_id')
+    if [ "$http_code" -ne 200 ]; then
+        handle_error "$http_code" "$response_body"
+    fi
+
+    mobile_app_id=$(echo "$response_body" | jq -r '.mobile_app_id')
+    scan_id=$(echo "$response_body" | jq -r '.scan_id')
 
     if [[ -n "$mobile_app_id" && -n "$scan_id" ]]; then
         upload_success=true
@@ -114,7 +131,7 @@ if $upload_success && [[ "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN
 
         if [ $elapsed_time -gt $timeout_duration ]; then
             echo "Timeout: Static scan did not complete within 5 minutes."
-            exit 1
+            exit 0
         fi
 
         response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/mobile_apps/${mobile_app_id}/scans/${scan_id}" \
@@ -144,30 +161,26 @@ if $upload_success && [[ "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN
                 findings_http_code=${findings_response: -3}
                 findings_response_body=${findings_response::-3}
 
-                if [ "$findings_http_code" -eq 200 ]; then
-                    total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
-
-                    if [ "$total_count" -gt 0 ]; then
-                        echo "FAILED: Found $total_count open security findings"
-                        echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
-                        exit 0 # Log scan result, but don't fail the pipeline
-                    else
-                        echo "PASSED: No security findings found."
-                        exit 0 # ok
-                    fi
-                else
-                    echo "Failed to retrieve security findings. HTTP Code: ${findings_http_code}"
-                    echo "Response: ${findings_response_body}"
+                if [ "$findings_http_code" -ne 200 ]; then
+                    handle_error "$findings_http_code" "$findings_response_body"
                 fi
 
-                break
+                total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
+
+                if [ "$total_count" -gt 0 ]; then
+                    echo "FAILED: Found $total_count open security findings"
+                    echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
+                    exit 0 # Log scan result, but don't fail the pipeline
+                else
+                    echo "PASSED: No security findings found."
+                    exit 0 # ok
+                fi
             else
-                echo "Static scan is still ongoing. Waiting before next poll..."
+                echo "Static scan is still ongoing..."
                 sleep 30  # Wait for 30 seconds before next poll
             fi
         else
-            echo "Failed to poll scan status. HTTP Code: ${http_code}"
-            break
+            handle_error "$http_code" "$response_body"
         fi
     done
 fi
