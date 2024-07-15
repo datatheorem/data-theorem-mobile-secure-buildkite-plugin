@@ -12,7 +12,7 @@ configuration:
   properties:
     UPLOAD_API_KEY:
       type: string
-    SIGNED_BINARY_PATH:
+    BINARY_PATH:
       type: string
     SOURCEMAP_PATH:
       type: string
@@ -26,5 +26,5 @@ configuration:
       type: string
   required:
     - UPLOAD_API_KEY
-    - SIGNED_BINARY_PATH
+    - BINARY_PATH
   additionalProperties: false

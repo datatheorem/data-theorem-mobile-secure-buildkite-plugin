@@ -27,8 +27,8 @@ if [ -z "$DT_UPLOAD_API_KEY" ]; then
 fi
 
 # Check if the environment variable is set
-if [ -z "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH" ]; then
-    echo "Error: Environment variable BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH is not set."
+if [ -z "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH" ]; then
+    echo "Error: Environment variable BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH is not set."
     exit 1
 fi
 
@@ -45,7 +45,7 @@ if [ -n "$source_map_path" ]; then
 fi
 
 # Get the file path from the environment variable
-file_path="$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SIGNED_BINARY_PATH"
+file_path="$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH"
 
 # Check if the file exists
 if [ -f "$file_path" ]; then
