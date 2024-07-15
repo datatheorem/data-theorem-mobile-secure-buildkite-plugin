@@ -1,6 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
+# Function to handle errors
+handle_error() {
+    local http_code=$1
+    local response_body=$2
+    case $http_code in
+        401)
+            echo "Error: Unauthorized (HTTP 401). Please verify that your API key as valid."
+            ;;
+        403)
+            echo "Error: Forbidden (HTTP 403). Please verify that your API key as valid scopes to access Mobile Secure results for this mobile app."
+            ;;
+        *)
+            echo "Failed to call API. HTTP Code: ${http_code}"
+            echo "Response: ${response_body}"
+            ;;
+    esac
+    exit 1
+}
 
 # Check if the environment variable is set
 if [ -z "$DT_UPLOAD_API_KEY" ]; then
@@ -19,7 +37,7 @@ source_map_path="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SOURCEMAP_PATH:-}
 if [ -n "$source_map_path" ]; then
     # Check if the path points to an existing file
     if [ -f "$source_map_path" ]; then
-      :
+        :
     else
         echo "Error: sourcemap file '${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SOURCEMAP_PATH}' does not exist"
         exit 1
@@ -37,41 +55,132 @@ else
     exit 1
 fi
 
+if [[ "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS" == "true" ]]; then
+    echo "POLL_SCAN_RESULTS is true"
+    if [ -z "$DT_MOBILE_RESULTS_API_KEY" ]; then
+        echo "Error: Environment variable RESULTS_API_KEY must be set when POLL_SCAN_RESULTS is set to true."
+        exit 1
+    fi
+fi
+
 maxRetries=3
-for (( retry = 0; retry < maxRetries; retry++ ))
-do
-  # Step 1: get the upload URL
-  echo "Get upload url"
-  step1_response=$(curl -s -w "%{http_code}" -X POST -H "Authorization: APIKey ${DT_UPLOAD_API_KEY}"  --data ""  https://api.securetheorem.com/uploadapi/v1/upload_init)
-  http_code=${step1_response: -3}
-  response_body=${step1_response::-3}
+upload_success=false
+timeout_duration=300  # Timeout after 5 minutes (300 seconds)
 
-  # For older versions of bash e.g. GNU bash, version 3.2.57(1)-release (x86_64-apple-darwin21)
-  # response_body=${step1_response%???}
-  # http_code=${step1_response#${response_body}}
+for (( retry = 0; retry < maxRetries; retry++ )); do
+    # Step 1: get the upload URL
+    echo "Get upload URL"
+    step1_response=$(curl -s -w "%{http_code}" -X POST -H "Authorization: APIKey ${DT_UPLOAD_API_KEY}" --data "" https://api.securetheorem.com/uploadapi/v1/upload_init)
+    http_code=${step1_response: -3}
+    response_body=${step1_response::-3}
 
-  # Check that http status code is 200
-  [ ! ${http_code} -eq 200 ] && echo ${response_body} && exit 1
-  upload_url=$(echo ${response_body} | jq -r ".upload_url")
-  echo ${upload_url}
+    # Check that http status code is 200
+    if [ "$http_code" -ne 200 ]; then
+        handle_error "$http_code" "$response_body"
+    fi
 
-  # Step 2: upload the APK
-  echo "Upload app"
-  # Prepare `curl` command with main file
-  curl_command=(curl -F "file=@${file_path}")
+    upload_url=$(echo ${response_body} | jq -r ".upload_url")
+    echo ${upload_url}
 
-  # Check if source map file exists and add it to `curl` command
-  if [ -n "$source_map_path" ]; then
-      curl_command+=(-F "sourcemap=@${source_map_path}")
-      echo "Including sourcemap (${source_map_path})"
-  fi
+    # Step 2: upload the APK
+    echo "Upload app"
+    # Prepare `curl` command with main file
+    curl_command=(curl -F "file=@${file_path}")
 
-  # Add upload URL to `curl` command
-  curl_command+=(${upload_url})
-  step2_response=$("${curl_command[@]}") && echo ${step2_response} && break
+    # Check if source map file exists and add it to `curl` command
+    if [ -n "$source_map_path" ]; then
+        curl_command+=(-F "sourcemap=@${source_map_path}")
+        echo "Including sourcemap (${source_map_path})"
+    fi
+
+    # Add upload URL to `curl` command
+    curl_command+=(${upload_url})
+    step2_response=$("${curl_command[@]}" -s -w "%{http_code}")
+    http_code=${step2_response: -3}
+    response_body=${step2_response::-3}
+
+    if [ "$http_code" -ne 200 ]; then
+        handle_error "$http_code" "$response_body"
+    fi
+
+    mobile_app_id=$(echo "$response_body" | jq -r '.mobile_app_id')
+    scan_id=$(echo "$response_body" | jq -r '.scan_id')
+
+    if [[ -n "$mobile_app_id" && -n "$scan_id" ]]; then
+        upload_success=true
+        break
+    fi
+
+    if [ $retry -eq $((maxRetries - 1)) ]; then
+        echo "Max retries reached. Exiting."
+        exit 1
+    fi
+
+    echo "Retrying... ($((retry + 1))/$maxRetries)"
 done
 
-if [ ${retry} -ge ${maxRetries} ]; then
-  echo "Upload failed after ${maxRetries} attempts"
-  exit 1
+if $upload_success && [[ "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS" == "true" ]]; then
+    echo "Polling for scan status: scan id=$scan_id"
+
+    start_time=$(date +%s)
+
+    # Polling loop
+    while true; do
+        current_time=$(date +%s)
+        elapsed_time=$((current_time - start_time))
+
+        if [ $elapsed_time -gt $timeout_duration ]; then
+            echo "Timeout: Static scan did not complete within 5 minutes."
+            exit 0
+        fi
+
+        response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/mobile_apps/${mobile_app_id}/scans/${scan_id}" \
+        -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}")
+
+        # Extract the HTTP status code and response body
+        http_code=${response: -3}
+        response_body=${response::-3}
+
+        if [ "$http_code" -eq 200 ]; then
+            static_scan_status=$(echo "$response_body" | jq -r '.static_scan.status')
+            echo "Scan Status: $static_scan_status"
+
+            if [ "$static_scan_status" == "COMPLETED" ]; then
+                echo "Scan completed successfully."
+
+                # Extract the start_date from the response for results_since parameter
+                start_date=$(echo "$response_body" | jq -r '.start_date')
+
+                # Step 3: Get security findings
+                findings_response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
+                -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
+                -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
+                --data-urlencode "status_group=OPEN" \
+                --data-urlencode "results_since=${start_date}")
+
+                findings_http_code=${findings_response: -3}
+                findings_response_body=${findings_response::-3}
+
+                if [ "$findings_http_code" -ne 200 ]; then
+                    handle_error "$findings_http_code" "$findings_response_body"
+                fi
+
+                total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
+
+                if [ "$total_count" -gt 0 ]; then
+                    echo "FAILED: Found $total_count open security findings"
+                    echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
+                    exit 0 # Log scan result, but don't fail the pipeline
+                else
+                    echo "PASSED: No security findings found."
+                    exit 0 # ok
+                fi
+            else
+                echo "Static scan is still ongoing..."
+                sleep 30  # Wait for 30 seconds before next poll
+            fi
+        else
+            handle_error "$http_code" "$response_body"
+        fi
+    done
 fi
