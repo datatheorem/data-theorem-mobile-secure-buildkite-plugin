@@ -14,14 +14,14 @@ Add the following to your `pipeline.yml`:
 ```yml
 steps:
   - label: "Build Mobile App Binary"
-    # replace this step with your own logix to build the pre-prod mobile binary that you want to scan
+    # replace this step with your own logic to build the pre-prod mobile binary that you want to scan
     command: "echo 'Example mobile binary build step...'"
 
   - label: "Upload Mobile App Binary to Data Theorem for scanning"
     plugins:
       - datatheorem/data-theorem-mobile-secure:
           UPLOAD_API_KEY: $(buildkite-agent secret get DT_UPLOAD_API_KEY)
-          SIGNED_BINARY_PATH: "app-debug.apk" # path to the pre-prod mobile binary built in the previous step
+          BINARY_PATH: "app-debug.apk" # path to the pre-prod mobile binary built in the previous step
 ```
 
 ### Example with optional `SOURCEMAP_PATH`:
@@ -30,19 +30,19 @@ An optional Java mapping.txt file for deobfuscating Android binaries.
 ```yml
 steps:
   - label: "Build Mobile App Binary"
-    # replace this step with your own logix to build the pre-prod mobile binary that you want to scan
+    # replace this step with your own logic to build the pre-prod mobile binary that you want to scan
     command: "echo 'Example mobile binary build step...'"
 
   - label: "Upload Mobile App Binary to Data Theorem for scanning"
     plugins:
       - datatheorem/data-theorem-mobile-secure:
           UPLOAD_API_KEY: $(buildkite-agent secret get DT_UPLOAD_API_KEY)
-          SIGNED_BINARY_PATH: "app-debug.apk" # path to the pre-prod mobile binary built in the previous step
+          BINARY_PATH: "app-debug.apk" # path to the pre-prod mobile binary built in the previous step
           SOURCEMAP_PATH: "mapping.txt" # path to mapping.txt
 ```
 
 ### Example with scan result polling
-Optionally, you can configure the plugin to wait for the scan to complete and print out hte number of new security findings.
+Optionally, you can configure the plugin to wait for the scan to complete and print out the number of new security findings.
 To do this, add the extra flag `POLL_SCAN_RESULTS: true`
 This mode will also require to set up a Data Theorem Mobile Results API Key
 It can be retrieved or created at [DevSecOps -> Data Theorem Results API](https://www.securetheorem.com/devsecops/v2/results_api_access)
@@ -51,14 +51,14 @@ And set it as a secret accessible to your BuildKite pipeline.
 ```yml
 steps:
   - label: "Build Mobile App Binary"
-    # replace this step with your own logix to build the pre-prod mobile binary that you want to scan
+    # replace this step with your own logic to build the pre-prod mobile binary that you want to scan
     command: "echo 'Example mobile binary build step...'"
 
   - label: "Upload Mobile App Binary to Data Theorem for scanning"
     plugins:
       - datatheorem/data-theorem-mobile-secure:
           UPLOAD_API_KEY: $(buildkite-agent secret get DT_UPLOAD_API_KEY)
-          SIGNED_BINARY_PATH: "app-debug.apk" # path to the pre-prod mobile binary built in the previous step
+          BINARY_PATH: "app-debug.apk" # path to the pre-prod mobile binary built in the previous step
           POLL_SCAN_RESULTS: true
           MOBILE_RESULTS_API_KEY: $(buildkite-agent secret get DT_MOBILE_RESULTS_API_KEY)
 ```
@@ -77,7 +77,7 @@ We recommend using [BuildKite Secrets](https://buildkite.com/docs/pipelines/secu
 - On your agent cluster, define a secret named `DT_UPLOAD_API_KEY` and set the value to what you have retrieved from the Data Theorem Portal
 - In the BuildKite pipeline definition, you can pass the API Key as `UPLOAD_API_KEY: $(buildkite-agent secret get DT_UPLOAD_API_KEY)` in the plugin's inputs
 
-### `SIGNED_BINARY_PATH` (Required, string)
+### `BINARY_PATH` (Required, string)
 Path to the mobile binary (APK, IPA, APPX or XAP) to be scanned.
 
 ### `SOURCEMAP_PATH` (Optional, string)
