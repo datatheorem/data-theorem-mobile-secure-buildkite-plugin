@@ -55,7 +55,10 @@ else
     exit 1
 fi
 
-if [[ "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS" == "true" ]]; then
+# Default value for POLL_SCAN_RESULTS
+POLL_SCAN_RESULTS="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS:-false}"
+
+if [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
     echo "POLL_SCAN_RESULTS is true"
     if [ -z "$DT_MOBILE_RESULTS_API_KEY" ]; then
         echo "Error: Environment variable RESULTS_API_KEY must be set when POLL_SCAN_RESULTS is set to true."
@@ -119,7 +122,7 @@ for (( retry = 0; retry < maxRetries; retry++ )); do
     echo "Retrying... ($((retry + 1))/$maxRetries)"
 done
 
-if $upload_success && [[ "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS" == "true" ]]; then
+if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
     echo "Polling for scan status: scan id=$scan_id"
 
     start_time=$(date +%s)
