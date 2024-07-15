@@ -63,6 +63,9 @@ steps:
           MOBILE_RESULTS_API_KEY: $(buildkite-agent secret get DT_MOBILE_RESULTS_API_KEY)
 ```
 
+The plugin's logs should look like this for a successful scan with no discovered security issues
+![buildkite-data-theorem-mobile-secure-plugin-polling-mode-no-issues.png](images%2Fbuildkite-data-theorem-mobile-secure-plugin-polling-mode-no-issues.png)
+
 ## Configuration
 
 ### `UPLOAD_API_KEY` (Required, string)
@@ -95,3 +98,6 @@ We recommend using [BuildKite Secrets](https://buildkite.com/docs/pipelines/secu
 
 - On your agent cluster, define a secret named `DT_MOBILE_RESULTS_API_KEY` and set the value to what you have retrieved from the Data Theorem Portal
 - In the BuildKite pipeline definition, you can pass the API Key as `MOBILE_RESULTS_API_KEY: $(buildkite-agent secret get DT_MOBILE_RESULTS_API_KEY)` in the plugin's inputs
+
+It should look like this in your Buildkite agent secret settings
+![buildkite-data-theorem-mobile-secure-plugin-secrets.png](images%2Fbuildkite-data-theorem-mobile-secure-plugin-secrets.png)
