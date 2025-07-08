@@ -141,3 +141,13 @@ Supported values:
 
 It should look like this in your Buildkite agent secret settings
 ![buildkite-data-theorem-mobile-secure-plugin-secrets.png](images%2Fbuildkite-data-theorem-mobile-secure-plugin-secrets.png)
+
+## Contributing
+
+### Running Tests
+
+To test the plugin, use the Buildkite plugin tester:
+
+```bash
+docker run -it --rm -v "$PWD:/plugin:ro" buildkite/plugin-tester
+```

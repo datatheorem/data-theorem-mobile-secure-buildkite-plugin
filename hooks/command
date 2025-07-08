@@ -193,17 +193,21 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                     if [ -n "$BLOCK_ON_SEVERITY" ]; then
                         echo "FAILED: Found $total_count vulnerabilities at or above $BLOCK_ON_SEVERITY severity level"
                         echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** vulnerabilities at or above **$BLOCK_ON_SEVERITY** severity level<br/>[View Results](https://www.securetheorem.com/mobile-secure/v2/security/)" --style "error"
                         exit 1 # Fail the pipeline
                     else
                         echo "FAILED: Found $total_count open security findings"
                         echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** open security findings<br/>[View Results](https://www.securetheorem.com/mobile-secure/v2/security/)" --style "warning"
                         exit 0 # Log scan result, but don't fail the pipeline
                     fi
                 else
                     if [ -n "$BLOCK_ON_SEVERITY" ]; then
                         echo "PASSED: No vulnerabilities found at or above $BLOCK_ON_SEVERITY severity level"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No vulnerabilities found at or above **$BLOCK_ON_SEVERITY** severity level" --style "success"
                     else
                         echo "PASSED: No security findings found."
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No security findings found" --style "success"
                     fi
                     exit 0 # ok
                 fi
