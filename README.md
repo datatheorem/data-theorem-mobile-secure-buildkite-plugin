@@ -66,6 +66,38 @@ steps:
 The plugin's logs should look like this for a successful scan with no discovered security issues
 ![buildkite-data-theorem-mobile-secure-plugin-polling-mode-no-issues.png](images%2Fbuildkite-data-theorem-mobile-secure-plugin-polling-mode-no-issues.png)
 
+### Example with vulnerability blocking
+The plugin supports automatic build blocking based on security findings. When `BLOCK_ON_SEVERITY` is specified, the plugin will automatically enable polling and block the build if any vulnerabilities are found at or above the specified severity level.
+
+```yml
+steps:
+  - label: "Build Mobile App Binary"
+    # replace this step with your own logic to build the pre-prod mobile binary that you want to scan
+    command: "echo 'Example mobile binary build step...'"
+
+  - label: "Upload Mobile App Binary to Data Theorem for scanning"
+    plugins:
+      - datatheorem/data-theorem-mobile-secure:
+          UPLOAD_API_KEY: $(buildkite-agent secret get DT_UPLOAD_API_KEY)
+          BINARY_PATH: "app-debug.apk" # path to the pre-prod mobile binary built in the previous step
+          BLOCK_ON_SEVERITY: "HIGH" # Block build on HIGH severity vulnerabilities
+          MOBILE_RESULTS_API_KEY: $(buildkite-agent secret get DT_MOBILE_RESULTS_API_KEY)
+```
+
+## Vulnerability Blocking
+The plugin supports automatic build blocking based on security findings. When `BLOCK_ON_SEVERITY` is specified, the plugin will:
+
+1. Wait for the scan to complete (up to 5 minutes)
+2. Check for security findings at or above the specified severity level
+3. Block the build if any vulnerabilities are found at the minimum severity threshold
+
+**Important:** Vulnerability blocking requires a separate `MOBILE_RESULTS_API_KEY` with results access permissions.
+
+### Severity Levels
+- `HIGH`: Block on high severity vulnerabilities only
+- `MEDIUM`: Block on medium and high severity vulnerabilities
+- `LOW`: Block on all severity vulnerabilities (low, medium, high)
+
 ## Configuration
 
 ### `UPLOAD_API_KEY` (Required, string)
@@ -99,5 +131,23 @@ We recommend using [BuildKite Secrets](https://buildkite.com/docs/pipelines/secu
 - On your agent cluster, define a secret named `DT_MOBILE_RESULTS_API_KEY` and set the value to what you have retrieved from the Data Theorem Portal
 - In the BuildKite pipeline definition, you can pass the API Key as `MOBILE_RESULTS_API_KEY: $(buildkite-agent secret get DT_MOBILE_RESULTS_API_KEY)` in the plugin's inputs
 
+### `BLOCK_ON_SEVERITY` (Optional, string)
+Block the build if vulnerabilities are found at or above the specified severity level. When set, the plugin will automatically enable polling and require `MOBILE_RESULTS_API_KEY`.
+
+Supported values:
+- `HIGH`: Block on high severity vulnerabilities only
+- `MEDIUM`: Block on medium and high severity vulnerabilities
+- `LOW`: Block on all severity vulnerabilities (low, medium, high)
+
 It should look like this in your Buildkite agent secret settings
 ![buildkite-data-theorem-mobile-secure-plugin-secrets.png](images%2Fbuildkite-data-theorem-mobile-secure-plugin-secrets.png)
+
+## Contributing
+
+### Running Tests
+
+To test the plugin, use the Buildkite plugin tester:
+
+```bash
+docker run -it --rm -v "$PWD:/plugin:ro" buildkite/plugin-tester
+```

@@ -58,6 +58,16 @@ fi
 # Default value for POLL_SCAN_RESULTS
 POLL_SCAN_RESULTS="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS:-false}"
 
+# Get BLOCK_ON_SEVERITY setting
+BLOCK_ON_SEVERITY="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BLOCK_ON_SEVERITY:-}"
+
+# If BLOCK_ON_SEVERITY is set, automatically enable polling
+if [ -n "$BLOCK_ON_SEVERITY" ]; then
+    echo "BLOCK_ON_SEVERITY is set to: $BLOCK_ON_SEVERITY"
+    echo "Automatically enabling poll scan results"
+    POLL_SCAN_RESULTS="true"
+fi
+
 if [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
     echo "POLL_SCAN_RESULTS is true"
     if [ -z "$DT_MOBILE_RESULTS_API_KEY" ]; then
@@ -155,11 +165,20 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                 start_date=$(echo "$response_body" | jq -r '.start_date')
 
                 # Step 3: Get security findings
-                findings_response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
-                -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
-                -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
-                --data-urlencode "status_group=OPEN" \
-                --data-urlencode "results_since=${start_date}")
+                if [ -n "$BLOCK_ON_SEVERITY" ]; then
+                    findings_response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
+                    -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
+                    -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
+                    --data-urlencode "status_group=OPEN" \
+                    --data-urlencode "results_since=${start_date}" \
+                    --data-urlencode "minimum_severity=${BLOCK_ON_SEVERITY}")
+                else
+                    findings_response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
+                    -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
+                    -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
+                    --data-urlencode "status_group=OPEN" \
+                    --data-urlencode "results_since=${start_date}")
+                fi
 
                 findings_http_code=${findings_response: -3}
                 findings_response_body=${findings_response::-3}
@@ -171,11 +190,25 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                 total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
 
                 if [ "$total_count" -gt 0 ]; then
-                    echo "FAILED: Found $total_count open security findings"
-                    echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
-                    exit 0 # Log scan result, but don't fail the pipeline
+                    if [ -n "$BLOCK_ON_SEVERITY" ]; then
+                        echo "FAILED: Found $total_count vulnerabilities at or above $BLOCK_ON_SEVERITY severity level"
+                        echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** vulnerabilities at or above **$BLOCK_ON_SEVERITY** severity level<br/>[View Results](https://www.securetheorem.com/mobile-secure/v2/security/)" --style "error"
+                        exit 1 # Fail the pipeline
+                    else
+                        echo "FAILED: Found $total_count open security findings"
+                        echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** open security findings<br/>[View Results](https://www.securetheorem.com/mobile-secure/v2/security/)" --style "warning"
+                        exit 0 # Log scan result, but don't fail the pipeline
+                    fi
                 else
-                    echo "PASSED: No security findings found."
+                    if [ -n "$BLOCK_ON_SEVERITY" ]; then
+                        echo "PASSED: No vulnerabilities found at or above $BLOCK_ON_SEVERITY severity level"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No vulnerabilities found at or above **$BLOCK_ON_SEVERITY** severity level" --style "success"
+                    else
+                        echo "PASSED: No security findings found."
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No security findings found" --style "success"
+                    fi
                     exit 0 # ok
                 fi
             else
