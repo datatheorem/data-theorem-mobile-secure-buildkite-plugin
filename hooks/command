@@ -56,7 +56,7 @@ get_vulnerability_count_by_severity() {
         --data-urlencode "severity=${severity}")
         
         local findings_http_code=${findings_response: -3}
-        local findings_response_body=${findings_response::-3}
+        local findings_response_body=${findings_response%???}
         
         if [ "$findings_http_code" -ne 200 ]; then
             handle_error "$findings_http_code" "$findings_response_body"
@@ -70,13 +70,13 @@ get_vulnerability_count_by_severity() {
 }
 
 # Check if the environment variable is set
-if [ -z "$DT_UPLOAD_API_KEY" ]; then
+if [ -z "${DT_UPLOAD_API_KEY:-}" ]; then
     echo "Error: Environment variable DT_UPLOAD_API_KEY is not set."
     exit 1
 fi
 
 # Check if the environment variable is set
-if [ -z "$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH" ]; then
+if [ -z "${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH:-}" ]; then
     echo "Error: Environment variable BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH is not set."
     exit 1
 fi
@@ -119,8 +119,8 @@ fi
 
 if [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
     echo "POLL_SCAN_RESULTS is true"
-    if [ -z "$DT_MOBILE_RESULTS_API_KEY" ]; then
-        echo "Error: Environment variable RESULTS_API_KEY must be set when POLL_SCAN_RESULTS is set to true."
+    if [ -z "${DT_MOBILE_RESULTS_API_KEY:-}" ]; then
+        echo "Error: Environment variable DT_MOBILE_RESULTS_API_KEY must be set when POLL_SCAN_RESULTS is set to true."
         exit 1
     fi
 fi
@@ -134,7 +134,7 @@ for (( retry = 0; retry < maxRetries; retry++ )); do
     echo "Get upload URL"
     step1_response=$(curl -s -w "%{http_code}" -X POST -H "Authorization: APIKey ${DT_UPLOAD_API_KEY}" --data "" https://api.securetheorem.com/uploadapi/v1/upload_init)
     http_code=${step1_response: -3}
-    response_body=${step1_response::-3}
+    response_body=${step1_response%???}
 
     # Check that http status code is 200
     if [ "$http_code" -ne 200 ]; then
@@ -159,7 +159,7 @@ for (( retry = 0; retry < maxRetries; retry++ )); do
     curl_command+=(${upload_url})
     step2_response=$("${curl_command[@]}" -s -w "%{http_code}")
     http_code=${step2_response: -3}
-    response_body=${step2_response::-3}
+    response_body=${step2_response%???}
 
     if [ "$http_code" -ne 200 ]; then
         handle_error "$http_code" "$response_body"
@@ -201,7 +201,7 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
 
         # Extract the HTTP status code and response body
         http_code=${response: -3}
-        response_body=${response::-3}
+        response_body=${response%???}
 
         if [ "$http_code" -eq 200 ]; then
             static_scan_status=$(echo "$response_body" | jq -r '.static_scan.status')
@@ -224,7 +224,7 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                     --data-urlencode "results_since=${start_date}")
                     
                     findings_http_code=${findings_response: -3}
-                    findings_response_body=${findings_response::-3}
+                    findings_response_body=${findings_response%???}
 
                     if [ "$findings_http_code" -ne 200 ]; then
                         handle_error "$findings_http_code" "$findings_response_body"
@@ -257,7 +257,7 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                 fi
             else
                 echo "Static scan is still ongoing..."
-                sleep 30  # Wait for 30 seconds before next poll
+                sleep 29  # Wait for 29 seconds before next poll
             fi
         else
             handle_error "$http_code" "$response_body"
