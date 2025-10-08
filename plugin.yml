@@ -33,6 +33,13 @@ configuration:
         HIGH: Block on high severity vulnerabilities only
         MEDIUM: Block on medium and high severity vulnerabilities
         LOW: Block on all severity vulnerabilities (low, medium, high)
+    POLLING_TIMEOUT:
+      type: number
+      default: 300
+      description: |
+        Timeout duration in seconds for polling scan results.
+        Default is 300 seconds (5 minutes).
+        Only applies when POLL_SCAN_RESULTS is true or BLOCK_ON_SEVERITY is set.
   required:
     - UPLOAD_API_KEY
     - BINARY_PATH

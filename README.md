@@ -87,7 +87,7 @@ steps:
 ## Vulnerability Blocking
 The plugin supports automatic build blocking based on security findings. When `BLOCK_ON_SEVERITY` is specified, the plugin will:
 
-1. Wait for the scan to complete (up to 5 minutes)
+1. Wait for the scan to complete (default: 5 minutes, configurable via `POLLING_TIMEOUT`)
 2. Check for security findings at or above the specified severity level
 3. Block the build if any vulnerabilities are found at the minimum severity threshold
 
@@ -138,6 +138,15 @@ Supported values:
 - `HIGH`: Block on high severity vulnerabilities only
 - `MEDIUM`: Block on medium and high severity vulnerabilities
 - `LOW`: Block on all severity vulnerabilities (low, medium, high)
+
+### `POLLING_TIMEOUT` (Optional, number)
+Timeout duration in seconds for polling scan results. Default is 300 seconds (5 minutes).
+This parameter only applies when `POLL_SCAN_RESULTS` is `true` or when `BLOCK_ON_SEVERITY` is set.
+
+Example:
+```yml
+POLLING_TIMEOUT: 600  # Wait up to 10 minutes for scan results
+```
 
 It should look like this in your Buildkite agent secret settings
 ![buildkite-data-theorem-mobile-secure-plugin-secrets.png](images%2Fbuildkite-data-theorem-mobile-secure-plugin-secrets.png)
