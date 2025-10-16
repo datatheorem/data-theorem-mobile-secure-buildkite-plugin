@@ -204,7 +204,7 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
         response_body=${response%???}
 
         if [ "$http_code" -eq 200 ]; then
-            static_scan_status=$(echo "$response_body" | jq -r '.static_scan.status')
+            static_scan_status=$(echo "$response_body" | jq -r '.static_scan.status // .status // empty')
             echo "Scan Status: $static_scan_status"
 
             if [ "$static_scan_status" == "COMPLETED" ]; then
