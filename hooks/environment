@@ -9,7 +9,7 @@ resolve_secret() {
     local secret_name="${BASH_REMATCH[2]}"
     secret_value=$(buildkite-agent secret get "$secret_name")
   fi
-  echo "$secret_value"
+  printf '%s' "$secret_value"
 }
 
 # Fetch and resolve the API key
