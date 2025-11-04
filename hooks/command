@@ -184,6 +184,7 @@ done
 
 if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
     echo "Polling for scan status: scan id=$scan_id"
+    poll_start_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
 
     start_time=$(date +%s)
 
@@ -234,18 +235,17 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                     total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
                 fi
 
-                results_portal_url="https://www.securetheorem.com/mobile-secure/v2/security/?mobile_app_id=$mobile_app_id&filter_by_named_filter=mobile_app:$mobile_app_uuid"
-                # TODO(VW): Add more filters to restrict by date or the last scan
+                results_portal_url="https://www.securetheorem.com/mobile-secure/v2/security?mobile_app_id=$mobile_app_id&filter_by_named_filter=mobile_app:$mobile_app_uuid"
+                poll_end_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
+                results_portal_url="${results_portal_url}&latest_change_start=${poll_start_date}&latest_change_end=${poll_end_date}"
                 if [ -n "$BLOCK_ON_SEVERITY" ]; then
                       # Append severity filters based on BLOCK_ON_SEVERITY
                       case "$BLOCK_ON_SEVERITY" in
                           HIGH)
-                              # Add encoded severity=HIGH
-                              results_portal_url="${results_portal_url}&tableFilters=N4IgxgrgTlCmB2AXA%252BgZ0QQ0RVIBcA2qAGYCWANorFACKmoAO5GAngHIYC2s%252BIAwtDhIABAGVM2XABoQANwzkIPPCADyABQCibEAF8pJClVr0mrDt14CYCRGIk4QM%252BYuUg2mgOp6AujLKU1MgARixosLLUpIgs%252BEQgACamzCwAagpKvAASpADmABZOIAHGdIwpFm6iEVExRS6ZKlkAkgDiWb66QA"
+                              results_portal_url="${results_portal_url}&severity=HIGH"
                               ;;
                           MEDIUM)
-                              # Add encoded severity=HIGH&severity=MEDIUM
-                              results_portal_url="${results_portal_url}&tableFilters=N4IgxgrgTlCmB2AXA%252BgZ0QQ0RVIBcA2qAGYCWANorFACKmoAO5GAngHIYC2s%252BIAwtDhIABAGVM2XABoQANwzkIPPCADyABQCibEAF8pJClVr0mrDt14CYCRGIk4QM%252BYuUg2mgOp6AujLKU1MgARixosLLUpIgs%252BEQgACamzCwAagpKvAASpADmABZOIAHGdIwpFm6iEVExRS6ZKlkAkgDiWXoGicms6a68ALKwSRCcRSXUZWbsXFU1UNGxzhluA5o0zQCqA766QA"
+                              results_portal_url="${results_portal_url}&severity=HIGH&severity=MEDIUM"
                               ;;
                           LOW)
                               # No filters for LOW — show all severities
