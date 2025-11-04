@@ -166,6 +166,7 @@ for (( retry = 0; retry < maxRetries; retry++ )); do
     fi
 
     mobile_app_id=$(echo "$response_body" | jq -r '.mobile_app_id')
+    mobile_app_uuid=$(echo "$response_body" | jq -r '.mobile_app_uuid')
     scan_id=$(echo "$response_body" | jq -r '.scan_id')
 
     if [[ -n "$mobile_app_id" && -n "$scan_id" ]]; then
@@ -183,6 +184,7 @@ done
 
 if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
     echo "Polling for scan status: scan id=$scan_id"
+    poll_start_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
 
     start_time=$(date +%s)
 
@@ -192,7 +194,7 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
         elapsed_time=$((current_time - start_time))
 
         if [ $elapsed_time -gt $timeout_duration ]; then
-            echo "Timeout: Static scan did not complete within ${timeout_duration} seconds."
+            echo "Timeout: Scan did not complete within ${timeout_duration} seconds."
             exit 0
         fi
 
@@ -233,16 +235,36 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                     total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
                 fi
 
+                results_portal_url="https://www.securetheorem.com/mobile-secure/v2/security?mobile_app_id=$mobile_app_id&filter_by_named_filter=mobile_app:$mobile_app_uuid"
+                poll_end_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
+                results_portal_url="${results_portal_url}&latest_change_start=${poll_start_date}&latest_change_end=${poll_end_date}"
+                if [ -n "$BLOCK_ON_SEVERITY" ]; then
+                      # Append severity filters based on BLOCK_ON_SEVERITY
+                      case "$BLOCK_ON_SEVERITY" in
+                          HIGH)
+                              results_portal_url="${results_portal_url}&severity=HIGH"
+                              ;;
+                          MEDIUM)
+                              results_portal_url="${results_portal_url}&severity=HIGH&severity=MEDIUM"
+                              ;;
+                          LOW)
+                              # No filters for LOW — show all severities
+                              ;;
+                          *)
+                              echo "WARNING: Unknown BLOCK_ON_SEVERITY value '$BLOCK_ON_SEVERITY'"
+                              ;;
+                      esac
+                fi
                 if [ "$total_count" -gt 0 ]; then
                     if [ -n "$BLOCK_ON_SEVERITY" ]; then
                         echo "FAILED: Found $total_count vulnerabilities at or above $BLOCK_ON_SEVERITY severity level"
-                        echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
-                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** vulnerabilities at or above **$BLOCK_ON_SEVERITY** severity level<br/>[View Results](https://www.securetheorem.com/mobile-secure/v2/security/)" --style "error"
+                        echo "For more information visit $results_portal_url"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** vulnerabilities at or above **$BLOCK_ON_SEVERITY** severity level<br/>[View Results]($results_portal_url)" --style "error"
                         exit 1 # Fail the pipeline
                     else
                         echo "FAILED: Found $total_count open security findings"
-                        echo "For more information visit https://www.securetheorem.com/mobile-secure/v2/security/"
-                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** open security findings<br/>[View Results](https://www.securetheorem.com/mobile-secure/v2/security/)" --style "warning"
+                        echo "For more information visit $results_portal_url"
+                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** open security findings<br/>[View Results]($results_portal_url)" --style "warning"
                         exit 0 # Log scan result, but don't fail the pipeline
                     fi
                 else
@@ -256,7 +278,7 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
                     exit 0 # ok
                 fi
             else
-                echo "Static scan is still ongoing..."
+                echo "Scan is still ongoing..."
                 sleep 29  # Wait for 29 seconds before next poll
             fi
         else
