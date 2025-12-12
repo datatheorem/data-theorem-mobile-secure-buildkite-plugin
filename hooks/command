@@ -84,10 +84,13 @@ get_vulnerability_count_by_severity() {
             handle_error "$findings_http_code" "$findings_response_body"
         fi
 
-        local count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
-        if [ "$count" -eq 0 ]; then
-            echo "Found $count $severity severity findings (scope: $severity_check_scope)"
+        local count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count // 0')
+        # Ensure count is a valid number
+        if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+            count=0
         fi
+        # Always show what we found for each severity level
+        echo "Found $count $severity severity findings (scope: $severity_check_scope)" >&2
         total_count=$((total_count + count))
     done
 
@@ -420,7 +423,7 @@ for scan_idx in "${!all_scan_ids[@]}"; do
     start_date=$(echo "$status_data" | jq -r '.start_date // empty')
 
     # Determine results_since based on SEVERITY_CHECK_SCOPE
-    local effective_results_since=""
+    effective_results_since=""
     if [ "$SEVERITY_CHECK_SCOPE" = "CURRENT_SCAN" ]; then
         if [ -z "$start_date" ]; then
             echo "No start_date found in scan data for ${scan_id}"
@@ -455,7 +458,7 @@ for scan_idx in "${!all_scan_ids[@]}"; do
         esac
 
         if [ "$total_count" -gt 0 ]; then
-            local scope_description=""
+            scope_description=""
             if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
                 scope_description="in the mobile app"
             else
@@ -467,7 +470,7 @@ for scan_idx in "${!all_scan_ids[@]}"; do
             buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** vulnerabilities ${scope_description} at or above **$BLOCK_ON_SEVERITY** severity level<br/>[View Results]($results_portal_url)" --style "error"
             exit 1 # Fail the pipeline
         else
-            local scope_description=""
+            scope_description=""
             if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
                 scope_description="in the mobile app"
             else
@@ -483,7 +486,7 @@ for scan_idx in "${!all_scan_ids[@]}"; do
         total_count=$(get_vulnerability_count_by_severity "$WARN_ON_SEVERITY" "$mobile_app_id" "$effective_results_since" "$SEVERITY_CHECK_SCOPE")
 
         if [ "$total_count" -gt 0 ]; then
-            local scope_description=""
+            scope_description=""
             if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
                 scope_description="in the mobile app"
             else
@@ -493,7 +496,7 @@ for scan_idx in "${!all_scan_ids[@]}"; do
             echo "⚠️  WARNING: Found $total_count security findings ${scope_description} at or above $WARN_ON_SEVERITY severity level"
             echo "⚠️  These findings do not block the build, but should be reviewed and addressed."
         else
-            local scope_description=""
+            scope_description=""
             if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
                 scope_description="in the mobile app"
             else
@@ -519,7 +522,11 @@ for scan_idx in "${!all_scan_ids[@]}"; do
             handle_error "$findings_http_code" "$findings_response_body"
         fi
 
-        total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
+        total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count // 0')
+        # Ensure count is a valid number
+        if ! [[ "$total_count" =~ ^[0-9]+$ ]]; then
+            total_count=0
+        fi
 
         results_portal_url="https://www.securetheorem.com/mobile-secure/v2/security?mobile_app_id=$mobile_app_id&filter_by_named_filter=mobile_app:$mobile_app_uuid"
         poll_end_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
