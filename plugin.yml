@@ -12,10 +12,57 @@ configuration:
   properties:
     UPLOAD_API_KEY:
       type: string
+      description: |
+        Data Theorem upload API key
     BINARY_PATH:
       type: string
+      description: |
+        Path to the app to upload.
+
+        You can use a glob pattern to indicate variable parts of the build's file name
+        (for example, if the app's version number or build date is in the file name).
+        Examples of glob patterns:
+        - `app-*.apk` : search for any apk starting with `app-` in workspace root directory
+        - `**/app-*.ipa` : search for any ipa starting with `app-` in any subdirectory of the workspace
+        - `{,**/}app-debug*.*` : search for any file containing `app-debug` in root directory or in any subdirectory
+
+        If multiple files match the provided pattern all matching files will be uploaded.
+        The pattern should not match more than 3 files.
     SOURCEMAP_PATH:
       type: string
+      description: |
+        Path to the sourcemap file used to map obfuscated symbols to their original code name
+    USERNAME:
+      type: string
+      description: |
+        Username to be used for authenticated testing of the application.
+        If provided, will override the previously provided value.
+    PASSWORD:
+      type: string
+      description: |
+        Password to be used for authenticated testing of the application.
+        If provided, will override the previously provided value.
+        Use of Buildkite Secrets is recommended.
+    COMMENTS:
+      type: string
+      description: |
+        Miscellaneous, free-form comments regarding the upload.
+    RELEASE_ID:
+      type: string
+      description: |
+        A custom ID associated with the binary being submitted, since the app version may not change very often.
+        It is recommended that you use a unique value for this, such as the CI/CD job ID.
+        If not set, Data Theorem will assign the binary a release_id.
+    PLATFORM_VARIANT:
+      type: string
+      description: |
+        The variant of the platform to use for scanning; Currently, the accepted value is
+        IOS_ON_MAC (scan an iOS build on an Apple Silicon Mac instead of on an iOS device,
+        in order to exercise code paths that are specific to Macs.)
+    EXTERNAL_ID:
+      type: string
+      description: |
+        The external_id field represents your organization's custom identifier for the app, if any.
     POLL_SCAN_RESULTS:
       type: "boolean"
       default: false
@@ -24,22 +71,49 @@ configuration:
         When set to `true`, `MOBILE_RESULTS_API_KEY` also needs to be set
     MOBILE_RESULTS_API_KEY:
       type: string
+      description: |
+        Data Theorem results API key (required when BLOCK_ON_SEVERITY or WARN_ON_SEVERITY is used)
     BLOCK_ON_SEVERITY:
       type: string
       enum: ["HIGH", "MEDIUM", "LOW"]
       description: |
         Block the build if vulnerabilities are found at or above the specified severity level.
         When set, the plugin will automatically enable polling and require MOBILE_RESULTS_API_KEY.
-        HIGH: Block on high severity vulnerabilities only
-        MEDIUM: Block on medium and high severity vulnerabilities
-        LOW: Block on all severity vulnerabilities (low, medium, high)
+        Valid values: HIGH, MEDIUM, LOW
+        - HIGH: Block on high severity vulnerabilities only
+        - MEDIUM: Block on medium and high severity vulnerabilities
+        - LOW: Block on all severity vulnerabilities (low, medium, high)
+    WARN_ON_SEVERITY:
+      type: string
+      enum: ["HIGH", "MEDIUM", "LOW"]
+      description: |
+        Print warning messages if vulnerabilities with the specified minimum severity are found.
+        This is a softer version of BLOCK_ON_SEVERITY that doesn't fail the build.
+        Valid values: HIGH, MEDIUM, LOW
+        This requires a Data Theorem Mobile Results API Key to be set.
     POLLING_TIMEOUT:
       type: number
       default: 300
       description: |
         Timeout duration in seconds for polling scan results.
         Default is 300 seconds (5 minutes).
-        Only applies when POLL_SCAN_RESULTS is true or BLOCK_ON_SEVERITY is set.
+        Only applies when POLL_SCAN_RESULTS is true, BLOCK_ON_SEVERITY, or WARN_ON_SEVERITY is set.
+    WAIT_FOR_STATIC_SCAN_ONLY:
+      type: "boolean"
+      default: false
+      description: |
+        When enabled, waits for the static_scan to be COMPLETED instead of the top-level scan.
+        Default is false.
+    SEVERITY_CHECK_SCOPE:
+      type: string
+      enum: ["CURRENT_SCAN", "ALL_ISSUES"]
+      default: "CURRENT_SCAN"
+      description: |
+        Controls whether BLOCK_ON_SEVERITY and WARN_ON_SEVERITY check only findings
+        from the current scan or all open findings in the mobile app.
+        Valid values: CURRENT_SCAN, ALL_ISSUES
+        - CURRENT_SCAN: Check only findings discovered in the current scan (default)
+        - ALL_ISSUES: Check all open findings associated with the mobile app
   required:
     - UPLOAD_API_KEY
     - BINARY_PATH
