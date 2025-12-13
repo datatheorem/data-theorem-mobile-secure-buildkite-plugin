@@ -495,6 +495,7 @@ for scan_idx in "${!all_scan_ids[@]}"; do
 
             echo "⚠️  WARNING: Found $total_count security findings ${scope_description} at or above $WARN_ON_SEVERITY severity level"
             echo "⚠️  These findings do not block the build, but should be reviewed and addressed."
+            exit 0
         else
             scope_description=""
             if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
@@ -523,7 +524,6 @@ for scan_idx in "${!all_scan_ids[@]}"; do
         fi
 
         total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count // 0')
-        # Ensure count is a valid number
         if ! [[ "$total_count" =~ ^[0-9]+$ ]]; then
             total_count=0
         fi
