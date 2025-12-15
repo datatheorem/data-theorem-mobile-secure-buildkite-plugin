@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Global constants
+MAX_UPLOAD_FILES=3  # no more than 3 files can be uploaded at a time
+
 # Function to handle errors
 handle_error() {
     local http_code=$1
@@ -22,12 +25,18 @@ handle_error() {
 
 # Function to get vulnerability count by severity level
 # Makes multiple API calls based on severity level and sums the results
+# Parameters:
+#   $1: severity_level (HIGH, MEDIUM, LOW)
+#   $2: mobile_app_id
+#   $3: start_date (optional, empty string for ALL_ISSUES scope)
+#   $4: severity_check_scope (CURRENT_SCAN or ALL_ISSUES)
 get_vulnerability_count_by_severity() {
     local severity_level=$1
     local mobile_app_id=$2
     local start_date=$3
+    local severity_check_scope=${4:-"CURRENT_SCAN"}
     local total_count=0
-    
+
     # Define severity levels to check based on the requested level
     local severities=()
     case $severity_level in
@@ -45,27 +54,46 @@ get_vulnerability_count_by_severity() {
             exit 1
             ;;
     esac
-    
+
+    # Determine which results_since to use based on scope
+    local effective_results_since=""
+    if [ "$severity_check_scope" = "CURRENT_SCAN" ]; then
+        effective_results_since="$start_date"
+    fi
+    # For ALL_ISSUES, effective_results_since remains empty
+
     # Make API calls for each severity level
     for severity in "${severities[@]}"; do
-        local findings_response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
-        -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
-        -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
-        --data-urlencode "status_group=OPEN" \
-        --data-urlencode "results_since=${start_date}" \
-        --data-urlencode "severity=${severity}")
-        
+        local curl_args=(-s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
+            -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
+            -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
+            --data-urlencode "status_group=OPEN" \
+            --data-urlencode "severity=${severity}")
+
+        # Only add results_since if it's not empty (CURRENT_SCAN mode)
+        if [ -n "$effective_results_since" ]; then
+            curl_args+=(--data-urlencode "results_since=${effective_results_since}")
+        fi
+
+        local findings_response=$(curl "${curl_args[@]}")
+
         local findings_http_code=${findings_response: -3}
         local findings_response_body=${findings_response%???}
-        
+
         if [ "$findings_http_code" -ne 200 ]; then
             handle_error "$findings_http_code" "$findings_response_body"
         fi
-        
-        local count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
+
+        local count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count // 0')
+        # Ensure count is a valid number
+        if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+            count=0
+        fi
+        # Always show what we found for each severity level
+        echo "Found $count $severity severity findings (scope: $severity_check_scope)" >&2
         total_count=$((total_count + count))
     done
-    
+
     echo "$total_count"
 }
 
@@ -93,26 +121,70 @@ if [ -n "$source_map_path" ]; then
     fi
 fi
 
-# Get the file path from the environment variable
-file_path="$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH"
+# Get optional parameters
+USERNAME="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_USERNAME:-}"
+PASSWORD="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_PASSWORD:-}"
+COMMENTS="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_COMMENTS:-}"
+RELEASE_ID="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_RELEASE_ID:-}"
+PLATFORM_VARIANT="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_PLATFORM_VARIANT:-}"
+EXTERNAL_ID="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_EXTERNAL_ID:-}"
 
-# Check if the file exists
-if [ -f "$file_path" ]; then
-    echo "Will upload Mobile binary at $file_path to Data Theorem for scanning"
-else
-    echo "File does not exist at: $file_path"
+# Get the file path pattern from the environment variable
+file_path_pattern="$BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BINARY_PATH"
+
+# Use glob to find matching files
+shopt -s nullglob  # Return empty array if no matches
+files=($file_path_pattern)
+shopt -u nullglob
+
+# Check if any files were found
+if [ ${#files[@]} -eq 0 ]; then
+    echo "Error: No files found matching pattern: $file_path_pattern"
     exit 1
 fi
+
+# Check if too many files were found
+if [ ${#files[@]} -gt $MAX_UPLOAD_FILES ]; then
+    echo "Error: Too many files (${#files[@]}) match the provided glob pattern; please write a more restrictive pattern to match no more than $MAX_UPLOAD_FILES files."
+    exit 1
+fi
+
+echo "Found ${#files[@]} file(s) to upload"
 
 # Default value for POLL_SCAN_RESULTS
 POLL_SCAN_RESULTS="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLL_SCAN_RESULTS:-false}"
 
-# Get BLOCK_ON_SEVERITY setting
+# Get BLOCK_ON_SEVERITY and WARN_ON_SEVERITY settings
 BLOCK_ON_SEVERITY="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_BLOCK_ON_SEVERITY:-}"
+WARN_ON_SEVERITY="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_WARN_ON_SEVERITY:-}"
+WAIT_FOR_STATIC_SCAN_ONLY="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_WAIT_FOR_STATIC_SCAN_ONLY:-false}"
+SEVERITY_CHECK_SCOPE="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_SEVERITY_CHECK_SCOPE:-CURRENT_SCAN}"
 
-# If BLOCK_ON_SEVERITY is set, automatically enable polling
-if [ -n "$BLOCK_ON_SEVERITY" ]; then
-    echo "BLOCK_ON_SEVERITY is set to: $BLOCK_ON_SEVERITY"
+# Validate severity levels
+if [ -n "$BLOCK_ON_SEVERITY" ] && [[ ! "$BLOCK_ON_SEVERITY" =~ ^(HIGH|MEDIUM|LOW)$ ]]; then
+    echo "Error: BLOCK_ON_SEVERITY must be one of: HIGH, MEDIUM, LOW"
+    exit 1
+fi
+
+if [ -n "$WARN_ON_SEVERITY" ] && [[ ! "$WARN_ON_SEVERITY" =~ ^(HIGH|MEDIUM|LOW)$ ]]; then
+    echo "Error: WARN_ON_SEVERITY must be one of: HIGH, MEDIUM, LOW"
+    exit 1
+fi
+
+# Validate SEVERITY_CHECK_SCOPE
+if [[ ! "$SEVERITY_CHECK_SCOPE" =~ ^(CURRENT_SCAN|ALL_ISSUES)$ ]]; then
+    echo "Error: SEVERITY_CHECK_SCOPE must be one of: CURRENT_SCAN, ALL_ISSUES"
+    exit 1
+fi
+
+# If BLOCK_ON_SEVERITY or WARN_ON_SEVERITY is set, automatically enable polling
+if [ -n "$BLOCK_ON_SEVERITY" ] || [ -n "$WARN_ON_SEVERITY" ]; then
+    if [ -n "$BLOCK_ON_SEVERITY" ]; then
+        echo "BLOCK_ON_SEVERITY is set to: $BLOCK_ON_SEVERITY"
+    fi
+    if [ -n "$WARN_ON_SEVERITY" ]; then
+        echo "WARN_ON_SEVERITY is set to: $WARN_ON_SEVERITY"
+    fi
     echo "Automatically enabling poll scan results"
     POLL_SCAN_RESULTS="true"
 fi
@@ -123,70 +195,162 @@ if [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
         echo "Error: Environment variable DT_MOBILE_RESULTS_API_KEY must be set when POLL_SCAN_RESULTS is set to true."
         exit 1
     fi
+
+    if [ "$WAIT_FOR_STATIC_SCAN_ONLY" = "true" ]; then
+        echo "WAIT_FOR_STATIC_SCAN_ONLY is enabled: will wait for static_scan completion"
+    fi
+
+    if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
+        echo "SEVERITY_CHECK_SCOPE is set to ALL_ISSUES: checking all open issues in the mobile app"
+    else
+        echo "SEVERITY_CHECK_SCOPE is set to CURRENT_SCAN: checking only issues from the current scan"
+    fi
 fi
 
 maxRetries=3
-upload_success=false
 timeout_duration="${BUILDKITE_PLUGIN_DATA_THEOREM_MOBILE_SECURE_POLLING_TIMEOUT:-300}"  # Default: 5 minutes (300 seconds)
 
-for (( retry = 0; retry < maxRetries; retry++ )); do
-    # Step 1: get the upload URL
-    echo "Get upload URL"
-    step1_response=$(curl -s -w "%{http_code}" -X POST -H "Authorization: APIKey ${DT_UPLOAD_API_KEY}" --data "" https://api.securetheorem.com/uploadapi/v1/upload_init)
-    http_code=${step1_response: -3}
-    response_body=${step1_response%???}
+# Arrays to track scan information for all uploaded files
+declare -a all_mobile_app_ids
+declare -a all_mobile_app_uuids
+declare -a all_scan_ids
 
-    # Check that http status code is 200
-    if [ "$http_code" -ne 200 ]; then
-        handle_error "$http_code" "$response_body"
-    fi
+# Loop through all files and upload them
+file_idx=1
+for file_path in "${files[@]}"; do
+    echo "Processing file $file_path ($file_idx of ${#files[@]})"
 
-    upload_url=$(echo ${response_body} | jq -r ".upload_url")
-    echo ${upload_url}
+    upload_success=false
 
-    # Step 2: upload the APK
-    echo "Upload app"
-    # Prepare `curl` command with main file
-    curl_command=(curl -F "file=@${file_path}")
+    for (( retry = 0; retry < maxRetries; retry++ )); do
+        # Step 1: get the upload URL
+        echo "Get upload URL"
+        step1_response=$(curl -s -w "%{http_code}" -X POST -H "Authorization: APIKey ${DT_UPLOAD_API_KEY}" --data "" https://api.securetheorem.com/uploadapi/v1/upload_init)
+        http_code=${step1_response: -3}
+        response_body=${step1_response%???}
 
-    # Check if source map file exists and add it to `curl` command
-    if [ -n "$source_map_path" ]; then
-        curl_command+=(-F "sourcemap=@${source_map_path}")
-        echo "Including sourcemap (${source_map_path})"
-    fi
+        # Check that http status code is 200
+        if [ "$http_code" -ne 200 ]; then
+            handle_error "$http_code" "$response_body"
+        fi
 
-    # Add upload URL to `curl` command
-    curl_command+=(${upload_url})
-    step2_response=$("${curl_command[@]}" -s -w "%{http_code}")
-    http_code=${step2_response: -3}
-    response_body=${step2_response%???}
+        upload_url=$(echo ${response_body} | jq -r ".upload_url")
+        echo ${upload_url}
 
-    if [ "$http_code" -ne 200 ]; then
-        handle_error "$http_code" "$response_body"
-    fi
+        # Step 2: upload the binary
+        echo "Upload app"
+        # Prepare `curl` command with main file
+        curl_command=(curl -F "file=@${file_path}")
 
-    mobile_app_id=$(echo "$response_body" | jq -r '.mobile_app_id')
-    mobile_app_uuid=$(echo "$response_body" | jq -r '.mobile_app_uuid')
-    scan_id=$(echo "$response_body" | jq -r '.scan_id')
+        # Check if source map file exists and add it to `curl` command
+        if [ -n "$source_map_path" ]; then
+            curl_command+=(-F "sourcemap=@${source_map_path}")
+            echo "Including sourcemap (${source_map_path})"
+        fi
 
-    if [[ -n "$mobile_app_id" && -n "$scan_id" ]]; then
-        upload_success=true
-        break
-    fi
+        # Add optional metadata fields if set
+        if [ -n "$USERNAME" ]; then
+            curl_command+=(-F "username=${USERNAME}")
+            echo "DAST username set to: ${USERNAME}"
+        fi
 
-    if [ $retry -eq $((maxRetries - 1)) ]; then
-        echo "Max retries reached. Exiting."
+        if [ -n "$PASSWORD" ]; then
+            curl_command+=(-F "password=${PASSWORD}")
+            echo "DAST password is set to: (hidden)"
+        fi
+
+        if [ -n "$COMMENTS" ]; then
+            curl_command+=(-F "comments=${COMMENTS}")
+            echo "Comments are set to: ${COMMENTS}"
+        fi
+
+        if [ -n "$RELEASE_ID" ]; then
+            curl_command+=(-F "release_Id=${RELEASE_ID}")
+            echo "Release ID is set to: ${RELEASE_ID}"
+        fi
+
+        if [ -n "$PLATFORM_VARIANT" ]; then
+            curl_command+=(-F "platform_variant=${PLATFORM_VARIANT}")
+            echo "Platform variant is set to: ${PLATFORM_VARIANT}"
+        fi
+
+        if [ -n "$EXTERNAL_ID" ]; then
+            curl_command+=(-F "external_id=${EXTERNAL_ID}")
+            echo "External ID is set to: ${EXTERNAL_ID}"
+        fi
+
+        # Add upload URL to `curl` command
+        curl_command+=(${upload_url})
+        echo "Starting upload..."
+        step2_response=$("${curl_command[@]}" -s -w "%{http_code}")
+        http_code=${step2_response: -3}
+        response_body=${step2_response%???}
+        echo "Finished upload."
+
+        echo "Response: HTTP/${http_code}"
+
+        # Check the response
+        # If we receive 409 (ownership conflict) or if this is the last try, bail out
+        if [ "$http_code" -eq 200 ]; then
+            mobile_app_id=$(echo "$response_body" | jq -r '.mobile_app_id')
+            mobile_app_uuid=$(echo "$response_body" | jq -r '.mobile_app_uuid')
+            scan_id=$(echo "$response_body" | jq -r '.scan_id')
+
+            if [[ -n "$mobile_app_id" && -n "$scan_id" ]]; then
+                all_mobile_app_ids+=("$mobile_app_id")
+                all_mobile_app_uuids+=("$mobile_app_uuid")
+                all_scan_ids+=("$scan_id")
+                upload_success=true
+                break
+            fi
+        fi
+
+        if [ "$http_code" -eq 409 ]; then
+            handle_error "$http_code" "$response_body"
+        fi
+
+        if [ "$http_code" -ne 200 ]; then
+            handle_error "$http_code" "$response_body"
+        fi
+
+        if [ $retry -eq $((maxRetries - 1)) ]; then
+            echo "Max retries reached. Exiting."
+            exit 1
+        fi
+
+        echo "Retrying... ($((retry + 1))/$maxRetries)"
+    done
+
+    if ! $upload_success; then
+        echo "Failed to upload file: $file_path"
         exit 1
     fi
 
-    echo "Retrying... ($((retry + 1))/$maxRetries)"
+    file_idx=$((file_idx + 1))
 done
 
-if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
+echo "Successfully uploaded ${#files[@]} file(s)"
+
+# Exit early if polling is not enabled
+if [[ "$POLL_SCAN_RESULTS" != "true" ]] || [ ${#all_scan_ids[@]} -eq 0 ]; then
+    exit 0
+fi
+
+# Polling mode is enabled - poll all scans
+poll_start_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
+
+# Process each scan
+for scan_idx in "${!all_scan_ids[@]}"; do
+    mobile_app_id="${all_mobile_app_ids[$scan_idx]}"
+    mobile_app_uuid="${all_mobile_app_uuids[$scan_idx]}"
+    scan_id="${all_scan_ids[$scan_idx]}"
+
     echo "Polling for scan status: scan id=$scan_id"
-    poll_start_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
 
     start_time=$(date +%s)
+    scan_completed=false
+    scan_failed=false
+    status_data=""
 
     # Polling loop
     while true; do
@@ -195,7 +359,7 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
 
         if [ $elapsed_time -gt $timeout_duration ]; then
             echo "Timeout: Scan did not complete within ${timeout_duration} seconds."
-            exit 0
+            break
         fi
 
         response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/mobile_apps/${mobile_app_id}/scans/${scan_id}" \
@@ -205,84 +369,186 @@ if $upload_success && [[ "$POLL_SCAN_RESULTS" == "true" ]]; then
         http_code=${response: -3}
         response_body=${response%???}
 
-        if [ "$http_code" -eq 200 ]; then
-            scan_status=$(echo "$response_body" | jq -r '.static_scan.status // .status // empty')
-            echo "Scan Status: $scan_status"
+        if [ "$http_code" -eq 401 ] || [ "$http_code" -eq 403 ]; then
+            echo "Authentication error checking scan status for ${scan_id}: HTTP ${http_code}. Please check your DT_MOBILE_RESULTS_API_KEY credentials."
+            exit 1
+        fi
 
-            if [ "$scan_status" == "COMPLETED" ]; then
-                echo "Scan completed successfully."
+        if [ "$http_code" -ne 200 ]; then
+            echo "Error checking scan status for ${scan_id}: HTTP ${http_code}"
+            sleep 29
+            continue
+        fi
 
-                # Extract the start_date from the response for results_since parameter
-                start_date=$(echo "$response_body" | jq -r '.start_date')
+        status_data="$response_body"
 
-                # Step 3: Get security findings
-                if [ -n "$BLOCK_ON_SEVERITY" ]; then
-                    total_count=$(get_vulnerability_count_by_severity "$BLOCK_ON_SEVERITY" "$mobile_app_id" "$start_date")
-                else
-                    findings_response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
-                    -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
-                    -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
-                    --data-urlencode "status_group=OPEN" \
-                    --data-urlencode "results_since=${start_date}")
-                    
-                    findings_http_code=${findings_response: -3}
-                    findings_response_body=${findings_response%???}
-
-                    if [ "$findings_http_code" -ne 200 ]; then
-                        handle_error "$findings_http_code" "$findings_response_body"
-                    fi
-
-                    total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count')
-                fi
-
-                results_portal_url="https://www.securetheorem.com/mobile-secure/v2/security?mobile_app_id=$mobile_app_id&filter_by_named_filter=mobile_app:$mobile_app_uuid"
-                poll_end_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
-                results_portal_url="${results_portal_url}&latest_change_start=${poll_start_date}&latest_change_end=${poll_end_date}"
-                if [ -n "$BLOCK_ON_SEVERITY" ]; then
-                      # Append severity filters based on BLOCK_ON_SEVERITY
-                      case "$BLOCK_ON_SEVERITY" in
-                          HIGH)
-                              results_portal_url="${results_portal_url}&severity=HIGH"
-                              ;;
-                          MEDIUM)
-                              results_portal_url="${results_portal_url}&severity=HIGH&severity=MEDIUM"
-                              ;;
-                          LOW)
-                              # No filters for LOW — show all severities
-                              ;;
-                          *)
-                              echo "WARNING: Unknown BLOCK_ON_SEVERITY value '$BLOCK_ON_SEVERITY'"
-                              ;;
-                      esac
-                fi
-                if [ "$total_count" -gt 0 ]; then
-                    if [ -n "$BLOCK_ON_SEVERITY" ]; then
-                        echo "FAILED: Found $total_count vulnerabilities at or above $BLOCK_ON_SEVERITY severity level"
-                        echo "For more information visit $results_portal_url"
-                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** vulnerabilities at or above **$BLOCK_ON_SEVERITY** severity level<br/>[View Results]($results_portal_url)" --style "error"
-                        exit 1 # Fail the pipeline
-                    else
-                        echo "FAILED: Found $total_count open security findings"
-                        echo "For more information visit $results_portal_url"
-                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** open security findings<br/>[View Results]($results_portal_url)" --style "warning"
-                        exit 0 # Log scan result, but don't fail the pipeline
-                    fi
-                else
-                    if [ -n "$BLOCK_ON_SEVERITY" ]; then
-                        echo "PASSED: No vulnerabilities found at or above $BLOCK_ON_SEVERITY severity level"
-                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No vulnerabilities found at or above **$BLOCK_ON_SEVERITY** severity level" --style "success"
-                    else
-                        echo "PASSED: No security findings found."
-                        buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No security findings found" --style "success"
-                    fi
-                    exit 0 # ok
-                fi
-            else
-                echo "Scan is still ongoing..."
-                sleep 29  # Wait for 29 seconds before next poll
+        # Check status based on WAIT_FOR_STATIC_SCAN_ONLY parameter
+        if [ "$WAIT_FOR_STATIC_SCAN_ONLY" = "true" ]; then
+            # Try to get static_scan status first
+            scan_status=$(echo "$status_data" | jq -r '.static_scan.status // empty')
+            if [ -z "$scan_status" ]; then
+                echo "static_scan field not available for scan ${scan_id}, falling back to overall scan status"
+                scan_status=$(echo "$status_data" | jq -r '.status // empty')
             fi
         else
-            handle_error "$http_code" "$response_body"
+            scan_status=$(echo "$status_data" | jq -r '.status // empty')
         fi
+
+        echo "Scan Status: $scan_status"
+
+        # Check if scan failed
+        if [[ "$scan_status" =~ ^(FAILED|SCAN_ATTEMPT_ERROR|CANCELLED)$ ]]; then
+            echo "Scan ${scan_id} failed, skipping vulnerability check"
+            scan_failed=true
+            break
+        fi
+
+        if [ "$scan_status" != "COMPLETED" ]; then
+            echo "Scan is still ongoing..."
+            sleep 29  # Wait for 29 seconds before next poll
+            continue
+        fi
+
+        echo "Scan completed successfully."
+        scan_completed=true
+        break
     done
+
+    # Skip findings check if scan didn't complete or failed
+    if [ "$scan_completed" = false ] || ([ "$scan_failed" = true ] && [ "$SEVERITY_CHECK_SCOPE" = "CURRENT_SCAN" ]); then
+        continue
+    fi
+
+    # Extract the start_date from the response for results_since parameter
+    start_date=$(echo "$status_data" | jq -r '.start_date // empty')
+
+    # Determine results_since based on SEVERITY_CHECK_SCOPE
+    effective_results_since=""
+    if [ "$SEVERITY_CHECK_SCOPE" = "CURRENT_SCAN" ]; then
+        if [ -z "$start_date" ]; then
+            echo "No start_date found in scan data for ${scan_id}"
+            continue
+        fi
+        effective_results_since="$start_date"
+    fi
+    # For ALL_ISSUES, effective_results_since remains empty
+
+    # Check for blocking vulnerabilities first
+    if [ -n "$BLOCK_ON_SEVERITY" ]; then
+        total_count=$(get_vulnerability_count_by_severity "$BLOCK_ON_SEVERITY" "$mobile_app_id" "$effective_results_since" "$SEVERITY_CHECK_SCOPE")
+
+        results_portal_url="https://www.securetheorem.com/mobile-secure/v2/security?mobile_app_id=$mobile_app_id&filter_by_named_filter=mobile_app:$mobile_app_uuid"
+        poll_end_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
+
+        if [ "$SEVERITY_CHECK_SCOPE" = "CURRENT_SCAN" ]; then
+            results_portal_url="${results_portal_url}&latest_change_start=${poll_start_date}&latest_change_end=${poll_end_date}"
+        fi
+
+        # Append severity filters based on BLOCK_ON_SEVERITY
+        case "$BLOCK_ON_SEVERITY" in
+            HIGH)
+                results_portal_url="${results_portal_url}&severity=HIGH"
+                ;;
+            MEDIUM)
+                results_portal_url="${results_portal_url}&severity=HIGH&severity=MEDIUM"
+                ;;
+            LOW)
+                # No filters for LOW — show all severities
+                ;;
+        esac
+
+        if [ "$total_count" -gt 0 ]; then
+            scope_description=""
+            if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
+                scope_description="in the mobile app"
+            else
+                scope_description="in this scan"
+            fi
+
+            echo "FAILED: Found $total_count vulnerabilities ${scope_description} at or above $BLOCK_ON_SEVERITY severity level"
+            echo "For more information visit $results_portal_url"
+            buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** vulnerabilities ${scope_description} at or above **$BLOCK_ON_SEVERITY** severity level<br/>[View Results]($results_portal_url)" --style "error"
+            exit 1 # Fail the pipeline
+        else
+            scope_description=""
+            if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
+                scope_description="in the mobile app"
+            else
+                scope_description="for scan ${scan_id}"
+            fi
+
+            echo "PASSED: No vulnerabilities found at or above $BLOCK_ON_SEVERITY severity level ${scope_description}"
+        fi
+    fi
+
+    # Check for warning vulnerabilities
+    if [ -n "$WARN_ON_SEVERITY" ]; then
+        total_count=$(get_vulnerability_count_by_severity "$WARN_ON_SEVERITY" "$mobile_app_id" "$effective_results_since" "$SEVERITY_CHECK_SCOPE")
+
+        if [ "$total_count" -gt 0 ]; then
+            scope_description=""
+            if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
+                scope_description="in the mobile app"
+            else
+                scope_description="for scan ${scan_id}"
+            fi
+
+            echo "⚠️  WARNING: Found $total_count security findings ${scope_description} at or above $WARN_ON_SEVERITY severity level"
+            echo "⚠️  These findings do not block the build, but should be reviewed and addressed."
+            exit 0
+        else
+            scope_description=""
+            if [ "$SEVERITY_CHECK_SCOPE" = "ALL_ISSUES" ]; then
+                scope_description="in the mobile app"
+            else
+                scope_description="for scan ${scan_id}"
+            fi
+
+            echo "No security findings found at or above $WARN_ON_SEVERITY severity level ${scope_description}"
+        fi
+    fi
+
+    # If neither BLOCK_ON_SEVERITY nor WARN_ON_SEVERITY is set, just report all findings
+    if [ -z "$BLOCK_ON_SEVERITY" ] && [ -z "$WARN_ON_SEVERITY" ]; then
+        findings_response=$(curl -s -w "%{http_code}" -X GET "https://api.securetheorem.com/apis/mobile_security/results/v2/security_findings" \
+        -H "Authorization: APIKey ${DT_MOBILE_RESULTS_API_KEY}" \
+        -G --data-urlencode "mobile_app_id=${mobile_app_id}" \
+        --data-urlencode "status_group=OPEN" \
+        --data-urlencode "results_since=${effective_results_since}")
+
+        findings_http_code=${findings_response: -3}
+        findings_response_body=${findings_response%???}
+
+        if [ "$findings_http_code" -ne 200 ]; then
+            handle_error "$findings_http_code" "$findings_response_body"
+        fi
+
+        total_count=$(echo "$findings_response_body" | jq -r '.pagination_information.total_count // 0')
+        if ! [[ "$total_count" =~ ^[0-9]+$ ]]; then
+            total_count=0
+        fi
+
+        results_portal_url="https://www.securetheorem.com/mobile-secure/v2/security?mobile_app_id=$mobile_app_id&filter_by_named_filter=mobile_app:$mobile_app_uuid"
+        poll_end_date=$(TZ=UTC date +"%Y-%m-%dT%H:%M:%SZ")
+
+        if [ "$SEVERITY_CHECK_SCOPE" = "CURRENT_SCAN" ]; then
+            results_portal_url="${results_portal_url}&latest_change_start=${poll_start_date}&latest_change_end=${poll_end_date}"
+        fi
+
+        if [ "$total_count" -gt 0 ]; then
+            echo "FAILED: Found $total_count open security findings"
+            echo "For more information visit $results_portal_url"
+            buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>Found **$total_count** open security findings<br/>[View Results]($results_portal_url)" --style "warning"
+        else
+            echo "PASSED: No security findings found."
+            buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No security findings found" --style "success"
+        fi
+    fi
+done
+
+# If we made it through all scans without blocking, report success
+if [ -n "$BLOCK_ON_SEVERITY" ]; then
+    buildkite-agent annotate "**Data Theorem Mobile Security Scan Results**<br/>✅ No vulnerabilities found at or above **$BLOCK_ON_SEVERITY** severity level" --style "success"
 fi
+
+exit 0
